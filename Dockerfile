@@ -11,11 +11,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY best_specialist_modle_eff.pth .
-COPY best_student.pth .
-COPY app.py .
+COPY . .
 
 EXPOSE 3000
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
-  CMD curl -f http://localhost:${PORT}/health || exit 1
