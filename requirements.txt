@@ -17,3 +17,5 @@ scipy==1.13.1
 # Vision & Calcul
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
+
+pydub==0.25.1
