@@ -106,6 +106,7 @@ def load_models() -> None:
             setattr(parent, parts[-1], new_conv)
             break
 
+    # Assurez-vous que le fichier .pth est présent
     m_spec.load_state_dict(
         torch.load("best_specialist_modle_eff.pth", map_location=DEVICE),
         strict=False,
@@ -175,28 +176,34 @@ def normalize(x: np.ndarray) -> np.ndarray:
 # Audio processing & inference
 # -----------------------------------------------------------------------------
 def process_audio(audio_path: str) -> Dict:
+    # Chargement audio
     waveform, _ = librosa.load(audio_path, sr=16000, duration=5.0)
 
     target_length = 80000
-    waveform = (
-        np.pad(waveform, (0, target_length - len(waveform)))
-        if len(waveform) < target_length
-        else waveform[:target_length]
-    )
+    if len(waveform) < target_length:
+        waveform = np.pad(waveform, (0, target_length - len(waveform)))
+    else:
+        waveform = waveform[:target_length]
 
-    # ---- Master ---------------------------------------------------------------
+    # ---- Master (Multi-channel Input) -----------------------------------------
+    # Correction : y=waveform pour melspectrogram
     mel_128 = librosa.power_to_db(
-        librosa.feature.melspectrogram(waveform, sr=16000, n_mels=128),
+        librosa.feature.melspectrogram(y=waveform, sr=16000, n_mels=128),
         ref=np.max,
     )
     mel_img_128 = cv2.resize((mel_128 + 40) / 40, (224, 224))
 
-    zcr = cv2.resize(librosa.feature.zero_crossing_rate(waveform), (224, 224))
+    # Correction : y=waveform pour zero_crossing_rate
+    zcr = cv2.resize(librosa.feature.zero_crossing_rate(y=waveform), (224, 224))
+    
+    # Déjà correct dans votre snippet, mais vérifié
     centroid = cv2.resize(
         librosa.feature.spectral_centroid(y=waveform, sr=16000), (224, 224)
     )
+    
+    # Calcul du delta sur le centroïde
     delta_centroid = cv2.resize(
-        librosa.feature.delta(centroid), (224, 224)
+        librosa.feature.delta(centroid, axis=-1), (224, 224)
     )
 
     x_master = torch.from_numpy(
@@ -211,23 +218,27 @@ def process_audio(audio_path: str) -> Dict:
         )
     ).float().unsqueeze(0).to(DEVICE)
 
-    # ---- Student --------------------------------------------------------------
+    # ---- Student (RGB-like Spectrogram) ---------------------------------------
+    # Correction : y=waveform pour melspectrogram
     mel_192 = librosa.power_to_db(
         librosa.feature.melspectrogram(
-            waveform, sr=16000, n_mels=192, fmax=8000
+            y=waveform, sr=16000, n_mels=192, fmax=8000
         ),
         ref=np.max,
     )
     mel_img_192 = cv2.resize((mel_192 + 40) / 40, (224, 224))
 
+    # Le modèle attend 3 canaux (RGB), on stack l'image 3 fois
     x_student = torch.from_numpy(
         np.stack([mel_img_192] * 3, axis=0)
     ).float().unsqueeze(0).to(DEVICE)
 
+    # Inférence
     with torch.no_grad():
         p_master = F.softmax(audio_models["master"](x_master), dim=1).cpu().numpy()[0]
         p_student = F.softmax(audio_models["student"](x_student), dim=1).cpu().numpy()[0]
 
+    # Fusion des probabilités (Ensemble)
     eps = 1e-7
     log_probs = 0.6 * np.log(p_master + eps) + 0.4 * np.log(p_student + eps)
     probs = np.exp(log_probs)
@@ -260,12 +271,19 @@ async def predict(audio_file: UploadFile = File(...)):
     if len(audio_models) != 2:
         raise HTTPException(status_code=503, detail="Models not loaded")
 
+    # Gestion de l'extension de fichier temporaire
     suffix = os.path.splitext(audio_file.filename)[1] or ".webm"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await audio_file.read())
+        content = await audio_file.read()
+        tmp.write(content)
         tmp_path = tmp.name
 
     try:
-        return process_audio(tmp_path)
+        result = process_audio(tmp_path)
+        return result
+    except Exception as e:
+        logger.error(f"Inference error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
-        os.remove(tmp_path)
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
