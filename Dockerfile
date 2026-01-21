@@ -1,10 +1,18 @@
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
- PYTHONDONTWRITEBYTECODE=1 \
- PIP_NO_CACHE_DIR=off \
- PIP_DISABLE_PIP_VERSION_CHECK=on \
- PIP_DEFAULT_TIMEOUT=100
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=off \
+    PIP_DISABLE_PIP_VERSION_CHECK=on \
+    PIP_DEFAULT_TIMEOUT=100
+
+# ⬇️ AJOUTE CETTE SECTION - Dépendances système pour l'audio
+RUN apt-get update && apt-get install -y \
+    libsndfile1 \
+    libsndfile1-dev \
+    ffmpeg \
+    libavcodec-extra \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -15,5 +23,4 @@ COPY . .
 
 EXPOSE 8000
 
-# "app:app" = fichier app.py / objet FastAPI nommé app
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
